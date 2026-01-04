@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Database
+*.db
+*.sqlite
+trainbot.db
+example/trainbot.db
+
+# Generated media
+generated_media/
+images/
+
+# Environment
+.env
+example/.env
+
+# IDE
+.vscode/
+.idea/
+.claude/
+.cursorrules
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Scripts
+*.bat
+*.sql
+run_tests.bat
+example/start_bot.bat
+
+# Test files
+test_*.py
+debug_*.py
+final_test.py
+
+# Migration files
+migrate_db.py
+apply_migration.py
+add_column.sql
+update_*.py
+
+# Example folder
+example/
+
+# Plans
+plan.md
+example/plan.md
+
+# Portfolio materials
+portfolio/
+screencast_test_script_en.txt
+CHANGES.md
+FULL_SYSTEM_READY.md
+TESTING.md
+TESTING_SCRIPT.md
