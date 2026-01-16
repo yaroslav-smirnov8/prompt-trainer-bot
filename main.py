@@ -1,5 +1,5 @@
-import asyncio
-from typing import Callable, Dict, Any, Awaitable
+﻿import asyncio
+from typing import Callable, Dict, Any, Awaitable, Optional
 from loguru import logger
 import sys
 
@@ -15,6 +15,62 @@ from database.models import Base
 from database.populate import populate_text_lessons, populate_image_lessons, populate_quizzes
 
 
+# ===== USER ID EXTRACTION UTILITY =====
+
+class UserIdExtractor:
+    """Centralized utility for extracting user_id from various Telegram event types."""
+    
+    # Define extraction strategies as a list of (attribute_path, accessor) tuples
+    EXTRACTION_STRATEGIES = [
+        (('from_user',), lambda obj: obj.id),
+        (('chat',), lambda obj: obj.id),
+        (('message', 'from_user'), lambda obj: obj.id),
+        (('callback_query', 'from_user'), lambda obj: obj.id),
+        (('edited_message', 'from_user'), lambda obj: obj.id),
+        (('channel_post', 'chat'), lambda obj: obj.id),
+        (('edited_channel_post', 'chat'), lambda obj: obj.id),
+        (('inline_query', 'from_user'), lambda obj: obj.id),
+        (('chosen_inline_result', 'from_user'), lambda obj: obj.id),
+        (('shipping_query', 'from_user'), lambda obj: obj.id),
+        (('pre_checkout_query', 'from_user'), lambda obj: obj.id),
+        (('poll_answer',), lambda obj: obj.user.id if obj.user else None),
+        (('my_chat_member', 'from_user'), lambda obj: obj.id),
+        (('chat_member', 'from_user'), lambda obj: obj.id),
+        (('chat_join_request', 'from_user'), lambda obj: obj.id),
+    ]
+
+    @classmethod
+    def extract_user_id(cls, event: TelegramObject) -> Optional[int]:
+        """
+        Extract user_id from a Telegram event using configured strategies.
+        
+        Args:
+            event: Telegram event object
+            
+        Returns:
+            user_id if found, None otherwise
+        """
+        for attr_path, accessor in cls.EXTRACTION_STRATEGIES:
+            try:
+                obj = event
+                # Navigate through attribute path
+                for attr in attr_path:
+                    if not hasattr(obj, attr):
+                        break
+                    obj = getattr(obj, attr)
+                    if obj is None:
+                        break
+                else:
+                    # All attributes in path exist and are not None
+                    user_id = accessor(obj)
+                    if user_id is not None:
+                        return user_id
+            except (AttributeError, TypeError):
+                continue
+        
+        return None
+
+
 async def ensure_admin_users(session: async_sessionmaker):
     """Ensures that users specified in ADMIN_ID environment variable are set as admins."""
     admin_ids_str = str(settings.bot.admin_id)
@@ -23,9 +79,9 @@ async def ensure_admin_users(session: async_sessionmaker):
         return
 
     admin_ids = [int(uid.strip()) for uid in admin_ids_str.split(',') if uid.strip().isdigit()]
-    
+
     if not admin_ids:
-        logger.warning(f"Invalid ADMIN_ID format: {admin_ids_str}. Please use comma-separated integers.")
+        logger.warning(f"Invalid ADMIN_ID format: {admin_ids_str}. Please use comma-separated integers.")    
         return
 
     logger.info(f"Ensuring admin status for IDs: {admin_ids}")
@@ -36,7 +92,7 @@ async def ensure_admin_users(session: async_sessionmaker):
             if user:
                 if not user.is_admin:
                     await crud.set_admin_status(session, user_id, is_admin=True)
-                    logger.info(f"User {user_id} (username: {user.username}) successfully set as admin.")
+                    logger.info(f"User {user_id} (username: {user.username}) successfully set as admin.")    
                 else:
                     logger.info(f"User {user_id} (username: {user.username}) is already an admin.")
             else:
@@ -55,41 +111,7 @@ class SessionMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any],
     ) -> Any:
-        import logging
-        user_id = None
-        
-        # Attempt to get user_id from various event types
-        if hasattr(event, 'from_user') and event.from_user:
-            user_id = event.from_user.id
-        elif hasattr(event, 'chat') and event.chat: # For channel posts, etc.
-            user_id = event.chat.id
-        elif hasattr(event, 'message') and event.message and event.message.from_user:
-            user_id = event.message.from_user.id
-        elif hasattr(event, 'callback_query') and event.callback_query and event.callback_query.from_user:
-            user_id = event.callback_query.from_user.id
-        elif hasattr(event, 'edited_message') and event.edited_message and event.edited_message.from_user:
-            user_id = event.edited_message.from_user.id
-        elif hasattr(event, 'channel_post') and event.channel_post and event.channel_post.chat:
-            user_id = event.channel_post.chat.id
-        elif hasattr(event, 'edited_channel_post') and event.edited_channel_post and event.edited_channel_post.chat:
-            user_id = event.edited_channel_post.chat.id
-        elif hasattr(event, 'inline_query') and event.inline_query and event.inline_query.from_user:
-            user_id = event.inline_query.from_user.id
-        elif hasattr(event, 'chosen_inline_result') and event.chosen_inline_result and event.chosen_inline_result.from_user:
-            user_id = event.chosen_inline_result.from_user.id
-        elif hasattr(event, 'shipping_query') and event.shipping_query and event.shipping_query.from_user:
-            user_id = event.shipping_query.from_user.id
-        elif hasattr(event, 'pre_checkout_query') and event.pre_checkout_query and event.pre_checkout_query.from_user:
-            user_id = event.pre_checkout_query.from_user.id
-        elif hasattr(event, 'poll_answer') and event.poll_answer and event.poll_answer.user:
-            user_id = event.poll_answer.user.id
-        elif hasattr(event, 'my_chat_member') and event.my_chat_member and event.my_chat_member.from_user:
-            user_id = event.my_chat_member.from_user.id
-        elif hasattr(event, 'chat_member') and event.chat_member and event.chat_member.from_user:
-            user_id = event.chat_member.from_user.id
-        elif hasattr(event, 'chat_join_request') and event.chat_join_request and event.chat_join_request.from_user:
-            user_id = event.chat_join_request.from_user.id
-        
+        user_id = UserIdExtractor.extract_user_id(event)
         event_type = type(event).__name__
         logger.info(f"SessionMiddleware: Processing event type={event_type}, user_id={user_id}")
             
@@ -115,37 +137,7 @@ class AccessMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any],
     ) -> Any:
-        user_id = None
-        if hasattr(event, 'from_user') and event.from_user:
-            user_id = event.from_user.id
-        elif hasattr(event, 'chat') and event.chat:
-            user_id = event.chat.id
-        elif hasattr(event, 'message') and event.message and event.message.from_user:
-            user_id = event.message.from_user.id
-        elif hasattr(event, 'callback_query') and event.callback_query and event.callback_query.from_user:
-            user_id = event.callback_query.from_user.id
-        elif hasattr(event, 'edited_message') and event.edited_message and event.edited_message.from_user:
-            user_id = event.edited_message.from_user.id
-        elif hasattr(event, 'channel_post') and event.channel_post and event.channel_post.chat:
-            user_id = event.channel_post.chat.id
-        elif hasattr(event, 'edited_channel_post') and event.edited_channel_post and event.edited_channel_post.chat:
-            user_id = event.edited_channel_post.chat.id
-        elif hasattr(event, 'inline_query') and event.inline_query and event.inline_query.from_user:
-            user_id = event.inline_query.from_user.id
-        elif hasattr(event, 'chosen_inline_result') and event.chosen_inline_result and event.chosen_inline_result.from_user:
-            user_id = event.chosen_inline_result.from_user.id
-        elif hasattr(event, 'shipping_query') and event.shipping_query and event.shipping_query.from_user:
-            user_id = event.shipping_query.from_user.id
-        elif hasattr(event, 'pre_checkout_query') and event.pre_checkout_query and event.pre_checkout_query.from_user:
-            user_id = event.pre_checkout_query.from_user.id
-        elif hasattr(event, 'poll_answer') and event.poll_answer and event.poll_answer.user:
-            user_id = event.poll_answer.user.id
-        elif hasattr(event, 'my_chat_member') and event.my_chat_member and event.my_chat_member.from_user:
-            user_id = event.my_chat_member.from_user.id
-        elif hasattr(event, 'chat_member') and event.chat_member and event.chat_member.from_user:
-            user_id = event.chat_member.from_user.id
-        elif hasattr(event, 'chat_join_request') and event.chat_join_request and event.chat_join_request.from_user:
-            user_id = event.chat_join_request.from_user.id
+        user_id = UserIdExtractor.extract_user_id(event)
         
         if user_id is None:
             logger.warning(f"AccessMiddleware: Could not determine user_id for event type={type(event).__name__}. Skipping access check.")
@@ -156,6 +148,7 @@ class AccessMiddleware(BaseMiddleware):
 
         if user and not user.is_active:
             logger.warning(f"AccessMiddleware: User {user_id} is not active. Denying access.")
+            
             if isinstance(event, Message):
                 await event.answer("Your access to the bot is restricted.")
             elif isinstance(event, CallbackQuery):
@@ -172,40 +165,9 @@ class ErrorHandlingMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any],
     ) -> Any:
-        user_id = None
+        user_id = UserIdExtractor.extract_user_id(event)
         event_type = type(event).__name__
         
-        if hasattr(event, 'from_user') and event.from_user:
-            user_id = event.from_user.id
-        elif hasattr(event, 'chat') and event.chat:
-            user_id = event.chat.id
-        elif hasattr(event, 'message') and event.message and event.message.from_user:
-            user_id = event.message.from_user.id
-        elif hasattr(event, 'callback_query') and event.callback_query and event.callback_query.from_user:
-            user_id = event.callback_query.from_user.id
-        elif hasattr(event, 'edited_message') and event.edited_message and event.edited_message.from_user:
-            user_id = event.edited_message.from_user.id
-        elif hasattr(event, 'channel_post') and event.channel_post and event.channel_post.chat:
-            user_id = event.channel_post.chat.id
-        elif hasattr(event, 'edited_channel_post') and event.edited_channel_post and event.edited_channel_post.chat:
-            user_id = event.edited_channel_post.chat.id
-        elif hasattr(event, 'inline_query') and event.inline_query and event.inline_query.from_user:
-            user_id = event.inline_query.from_user.id
-        elif hasattr(event, 'chosen_inline_result') and event.chosen_inline_result and event.chosen_inline_result.from_user:
-            user_id = event.chosen_inline_result.from_user.id
-        elif hasattr(event, 'shipping_query') and event.shipping_query and event.shipping_query.from_user:
-            user_id = event.shipping_query.from_user.id
-        elif hasattr(event, 'pre_checkout_query') and event.pre_checkout_query and event.pre_checkout_query.from_user:
-            user_id = event.pre_checkout_query.from_user.id
-        elif hasattr(event, 'poll_answer') and event.poll_answer and event.poll_answer.user:
-            user_id = event.poll_answer.user.id
-        elif hasattr(event, 'my_chat_member') and event.my_chat_member and event.my_chat_member.from_user:
-            user_id = event.my_chat_member.from_user.id
-        elif hasattr(event, 'chat_member') and event.chat_member and event.chat_member.from_user:
-            user_id = event.chat_member.from_user.id
-        elif hasattr(event, 'chat_join_request') and event.chat_join_request and event.chat_join_request.from_user:
-            user_id = event.chat_join_request.from_user.id
-            
         logger.info(f"ErrorHandlingMiddleware: Processing event type={event_type}, user_id={user_id}")
         
         try:
@@ -229,14 +191,10 @@ class ErrorHandlingMiddleware(BaseMiddleware):
                         logger.critical(f"ErrorHandlingMiddleware: Stack trace for ID 1 error:\n{traceback.format_exc()}")
                 
                 if isinstance(event, Message):
-                    await event.reply(
-                        "An error occurred while processing your request. Please try running the /start command to register in the system."
-                    )
+                    await event.reply("An error occurred while processing your request. Please try running the /start command to register in the system.")
                 elif isinstance(event, CallbackQuery):
                     await event.answer()
-                    await event.message.reply(
-                        "An error occurred while processing your request. Please try running the /start command to register in the system."
-                    )
+                    await event.message.reply("An error occurred while processing your request. Please try running the /start command to register in the system.")
             else:
                 logger.error(f"ErrorHandlingMiddleware: ValueError: {error_msg}, user_id={user_id}", exc_info=True)
                 raise
@@ -250,14 +208,10 @@ class ErrorHandlingMiddleware(BaseMiddleware):
                 logger.critical(f"ErrorHandlingMiddleware: Stack trace for possible ID 1 error:\n{traceback.format_exc()}")
             
             if isinstance(event, Message):
-                await event.reply(
-                    "An unexpected error occurred. Please try again later or contact the administrator."
-                )
+                await event.reply("An unexpected error occurred. Please try again later or contact the administrator.")
             elif isinstance(event, CallbackQuery):
                 await event.answer()
-                await event.message.reply(
-                    "An unexpected error occurred. Please try again later or contact the administrator."
-                )
+                await event.message.reply("An unexpected error occurred. Please try again later or contact the administrator.")
 
 
 async def main():
@@ -278,7 +232,7 @@ async def main():
         await populate_text_lessons(session)
         await populate_image_lessons(session)
         await populate_quizzes(session)
-        await ensure_admin_users(session) # Call the new function here
+        await ensure_admin_users(session)
 
     # Create bot and dispatcher
     bot = Bot(token=settings.bot.token, parse_mode="HTML")
