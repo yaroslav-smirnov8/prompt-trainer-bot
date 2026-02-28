@@ -31,9 +31,16 @@ class BotConfig:
 
 
 @dataclass
+class CloudflareConfig:
+    account_id: str
+    api_token: str
+
+
+@dataclass
 class Config:
     bot: BotConfig
     db: DatabaseConfig
+    cloudflare: CloudflareConfig
 
 
 def load_config() -> Config:
@@ -48,6 +55,10 @@ def load_config() -> Config:
             name=os.getenv("DB_NAME", "trainbot"),
             user=os.getenv("DB_USER", "postgres"),
             password=_env_values.get("DB_PASS", ""),  # Use direct parsing for special characters
+        ),
+        cloudflare=CloudflareConfig(
+            account_id=os.getenv("CLOUDFLARE_ACCOUNT_ID", ""),
+            api_token=os.getenv("CLOUDFLARE_API_TOKEN", ""),
         ),
     )
 

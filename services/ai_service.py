@@ -9,47 +9,60 @@ import aiohttp
 from aiohttp import ClientTimeout
 from loguru import logger
 
-# Try to import required packages for LLM7 and Together AI
+# Try to import required packages for LLM7
 try:
     import requests
     API_AVAILABLE = True
 except ImportError:
     requests = None
     API_AVAILABLE = False
-    logger.warning("requests package not found, generation features will be disabled.")
+    logger.warning("requests package not found, text generation features will be disabled.")
 
 # Store API keys
 LLM7_API_KEY = os.getenv("LLM7_API_KEY")
-TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY")
 
 # Check if API keys are available
 TEXT_GEN_AVAILABLE = bool(LLM7_API_KEY)
-IMAGE_GEN_AVAILABLE = bool(TOGETHER_API_KEY)
-API_AVAILABLE = API_AVAILABLE and (TEXT_GEN_AVAILABLE or IMAGE_GEN_AVAILABLE)
 
 
 class AIGenerationService:
-    """Service for generating text and images using LLM7 and Together AI"""
+    """Service for generating text and images using LLM7 and Cloudflare Workers AI (SDXL)"""
 
     def __init__(self, images_dir: str = "generated_media"):
         self.images_dir = images_dir
         os.makedirs(self.images_dir, exist_ok=True)
-        self.available = API_AVAILABLE
         self.llm7_available = TEXT_GEN_AVAILABLE
-        self.together_available = IMAGE_GEN_AVAILABLE
-
-        if self.available:
-            if self.llm7_available:
-                logger.info("Text generation service initialized with LLM7.")
-            else:
-                logger.warning("LLM7 API key not provided, text generation will be disabled.")
-
-            if self.together_available:
-                logger.info("Image generation service initialized with Together AI Flux Schnell.")
-            else:
-                logger.warning("Together API key not provided, image generation will be disabled.")
+        
+        # Initialize Cloudflare SDXL handler
+        from .cloudflare_sdxl_handler import initialize_cloudflare_handler, get_cloudflare_handler
+        from config import config
+        
+        self.cloudflare_handler = None
+        self.cloudflare_available = False
+        
+        if config.cloudflare.account_id and config.cloudflare.api_token:
+            try:
+                self.cloudflare_handler = initialize_cloudflare_handler(
+                    account_id=config.cloudflare.account_id,
+                    api_token=config.cloudflare.api_token,
+                    images_dir=self.images_dir
+                )
+                self.cloudflare_available = self.cloudflare_handler.is_available()
+                if self.cloudflare_available:
+                    logger.info("Image generation service initialized with Cloudflare AI SDXL.")
+                else:
+                    logger.warning("Cloudflare AI configured but not available (missing dependencies or invalid credentials).")
+            except Exception as e:
+                logger.error(f"Failed to initialize Cloudflare SDXL handler: {e}")
         else:
-            logger.warning("LLM7/Together AI is not available or configured, generation features will be disabled.")
+            logger.info("Cloudflare API credentials not provided, image generation will be disabled.")
+        
+        self.available = self.llm7_available or self.cloudflare_available
+
+        if self.llm7_available:
+            logger.info("Text generation service initialized with LLM7.")
+        else:
+            logger.info("LLM7 API key not provided, text generation will be disabled.")
 
 
     async def generate_text(self, prompt: str, provider_name: Optional[str] = None) -> Tuple[bool, str]:
@@ -108,66 +121,34 @@ class AIGenerationService:
             return False, f"Error generating text: {str(e)}"
 
     async def generate_image(self, prompt: str) -> Tuple[bool, Union[str, bytes]]:
-        """Generate image based on prompt"""
-        if not self.together_available:
-            logger.error("Image generation is not available because Together AI key is not provided.")
+        """Generate image based on prompt using Cloudflare Workers AI (SDXL)
+        
+        Returns:
+            Tuple of (success: bool, result: str) where result is local file path on success
+        """
+        if not self.cloudflare_available or not self.cloudflare_handler:
+            logger.error("Image generation is not available because Cloudflare AI is not configured.")
             return False, "Image generation is not available"
 
-        logger.info(f"Generating image with Together AI Flux Schnell prompt: '{prompt}'")
+        logger.info(f"Generating image with Cloudflare AI SDXL prompt: '{prompt}'")
 
         try:
-            logger.info("Attempting to generate image with Together AI...")
-
-            headers = {
-                "Authorization": f"Bearer {TOGETHER_API_KEY}",
-                "Content-Type": "application/json"
-            }
-
-            request_data = {
-                "model": "black-forest-labs/FLUX.1-schnell",  # Flux Schnell model
-                "prompt": prompt,
-                "width": 1024,
-                "height": 1024,
-                "steps": 4,
-                "n": 1,
-                "response_format": "url"
-            }
-
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: requests.post(
-                    "https://api.together.xyz/v1/images/generations",
-                    headers=headers,
-                    json=request_data,
-                    timeout=120
-                )
+            logger.info("Attempting to generate image with Cloudflare AI SDXL...")
+            
+            # Use the Cloudflare SDXL handler
+            success, result = await self.cloudflare_handler.generate_image(
+                prompt=prompt,
+                width=1024,
+                height=1024
             )
 
-            if response.status_code == 200:
-                result = response.json()
-
-                if result.get("data") and len(result["data"]) > 0:
-                    image_url = result["data"][0]["url"]
-                    logger.info(f"Successfully generated image via Together AI: {image_url[:100]}...")
-
-                    # Return the URL directly to Telegram for immediate delivery
-                    # This avoids the slow download process and lets Telegram handle the image directly
-                    logger.info(f"Returning image URL directly to handler for immediate Telegram delivery: {image_url}")
-                    return True, image_url
-                else:
-                    logger.error(f"No image data in Together AI response: {result}")
-                    return False, "No image data in response from Together AI"
+            if success:
+                logger.info(f"Successfully generated image via Cloudflare SDXL: {result}")
+                return True, result
             else:
-                error_text = response.text
-                logger.error(f"Together AI API error: {response.status_code} - {error_text}")
-                return False, f"Together AI API error: {response.status_code}"
+                logger.error(f"Cloudflare SDXL returned error: {result}")
+                return False, result
 
-        except asyncio.TimeoutError:
-            logger.warning("Image generation timed out after 120 seconds.")
-            return False, "Image generation timed out."
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error during image generation: {e}", exc_info=True)
-            return False, f"Network error during generation: {str(e)}"
         except Exception as e:
             logger.error(f"An unexpected error occurred during image generation: {e}", exc_info=True)
             return False, f"An error occurred during image generation: {e}"

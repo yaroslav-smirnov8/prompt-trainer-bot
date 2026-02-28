@@ -15,7 +15,8 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["BOT_TOKEN"] = "123:ABC"
 os.environ["ADMIN_ID"] = "0"
 os.environ["LLM7_API_KEY"] = ""
-os.environ["TOGETHER_API_KEY"] = ""
+os.environ["CLOUDFLARE_ACCOUNT_ID"] = ""
+os.environ["CLOUDFLARE_API_TOKEN"] = ""
 
 @pytest.fixture(scope="session")
 def event_loop():
