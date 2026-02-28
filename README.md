@@ -73,6 +73,8 @@ ADMIN_ID=your_telegram_user_id
 4. Create `.env` file with your credentials
 5. Run the bot: `python main.py`
 
+This bot is designed to run within the Telegram ecosystem and requires a Telegram Bot token.
+
 ## API Integration
 
 The bot connects to modern AI APIs:
